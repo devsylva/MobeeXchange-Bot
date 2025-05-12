@@ -11,16 +11,22 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+import os
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+#initialize environment variables
+env = environ.Env()
+environ.Env.read_env()
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-porbb&*5u)r7x5t1f^f4q9^3-dc9%_va60^(m8m+y_r#cyqcpa'
+SECRET_KEY = env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -37,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'bot',
 ]
 
 MIDDLEWARE = [
@@ -116,6 +123,15 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Mobee Credentials
+MOBEE_API_KEY = env("MOBEE_API_KEY")
+MOBEE_API_SECRET = env("MOBEE_API_SECRET")
+
+# Telegram Bot Token
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_URL = env("TELEGRAM_WEBHOOK_URL")
+TELEGRAM_WEBHOOK_PATH = env("TELEGRAM_WEBHOOK_PATH")
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
