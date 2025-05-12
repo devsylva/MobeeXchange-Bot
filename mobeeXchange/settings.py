@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 import os
 import environ
+import pytz
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,7 +32,9 @@ SECRET_KEY = env('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "5be2-102-90-81-228.ngrok-free.app"
+]
 
 
 # Application definition
@@ -132,6 +135,34 @@ MOBEE_API_SECRET = env("MOBEE_API_SECRET")
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
 TELEGRAM_WEBHOOK_URL = env("TELEGRAM_WEBHOOK_URL")
 TELEGRAM_WEBHOOK_PATH = env("TELEGRAM_WEBHOOK_PATH")
+
+
+
+
+
+# Increase timeout settings if needed
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880  # 5MB
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10240
+TIMEOUT = 60
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': 'debug.log',
+        },
+    },
+    'loggers': {
+        'mobee': {
+            'handlers': ['file'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
