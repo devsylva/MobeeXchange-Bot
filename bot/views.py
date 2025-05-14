@@ -2,7 +2,7 @@ from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import Application, CommandHandler, CallbackContext, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from bot.models import TelegramUser
 import json
 from .keyboards import get_main_menu, get_deposit_menu
@@ -13,6 +13,7 @@ import asyncio
 import sys
 from telegram.request import HTTPXRequest
 from functools import wraps
+from .mobee_utils import getDepositAddress
 
 # Configure Windows event loop policy if needed
 if sys.platform == 'win32':
@@ -37,6 +38,23 @@ bot = Bot(
     request=HTTPXRequest(**request_kwargs)
 )
 
+# Global variable to hold the Application instance (initialized lazily)
+application = None
+
+async def initialize_application():
+    """Initialize the Telegram Application instance and register handlers."""
+    global application
+    if application is None:
+        logger.info("Initializing Telegram Application")
+        application = await Application.builder().bot(bot).build()
+        
+        # Register handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(handle_callback))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input))
+    
+    return application
+
 def async_handler(func):
     @wraps(func)
     def wrapped(request, *args, **kwargs):
@@ -53,55 +71,11 @@ def async_handler(func):
             return HttpResponse("Internal Server Error", status=500)
     return wrapped
 
-def landingPage(request):
-    return render(request, 'landingpage.html')
-
-@sync_to_async
-def create_or_update_user(user_id, username, first_name, last_name):
-    """Async wrapper for database operations"""
-    try:
-        telegram_user, created = TelegramUser.objects.get_or_create(
-            telegram_id=user_id,
-            defaults={
-                'username': username,
-                'first_name': first_name,
-                'last_name': last_name
-            }
-        )
-        if not created:
-            telegram_user.username = username
-            telegram_user.first_name = first_name
-            telegram_user.last_name = last_name
-            telegram_user.save()
-        return telegram_user
-    except Exception as e:
-        logger.error(f"Database error in create_or_update_user: {str(e)}", exc_info=True)
-        raise
-
-@sync_to_async
-def get_user_balance(telegram_user):
-    """Async wrapper for getting user balance"""
-    try:
-        telegram_user.refresh_from_db()
-        return telegram_user.balance
-    except Exception as e:
-        logger.error(f"Error getting user balance: {str(e)}", exc_info=True)
-        raise
-
-@sync_to_async
-def get_user_profit(telegram_user):
-    """Async wrapper for getting user profit"""
-    try:
-        telegram_user.refresh_from_db()
-        return telegram_user.profit
-    except Exception as e:
-        logger.error(f"Error getting user profit: {str(e)}", exc_info=True)
-        raise
-
 async def register_user(update: Update):
-    """Register or update user"""
+    """Register or update user."""
     try:
         user = update.effective_user
+        from .utils import create_or_update_user
         return await create_or_update_user(
             user.id,
             user.username,
@@ -112,7 +86,8 @@ async def register_user(update: Update):
         logger.error(f"Error in register_user: {str(e)}", exc_info=True)
         raise
 
-async def start(update: Update):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command."""
     try:
         telegram_user = await register_user(update)
         logger.info(f"User started bot: {telegram_user.telegram_id}")
@@ -143,19 +118,115 @@ async def start(update: Update):
             parse_mode='Markdown'
         )
 
-async def handle_callback(update: Update):
-    """Handle callback queries from inline keyboard"""
+async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user input for deposit amount."""
+    try:
+        telegram_user = await register_user(update)
+        amount_text = update.message.text.strip()
+
+        # Validate amount
+        try:
+            amount = float(amount_text)
+            if amount <= 0 or amount < 10000:
+                raise ValueError("Amount must be positive and greater than or equal to 10000")
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Please enter a valid positive number greater than or equal to 10,000 for the deposit amount.",
+                parse_mode='Markdown',
+                reply_markup=get_deposit_menu()
+            )
+            return
+
+        # Retrieve deposit method from user_data
+        deposit_method = context.user_data.get('deposit_method')
+        if not deposit_method:
+            await update.message.reply_text(
+                "⚠️ Session expired. Please select a deposit method again.",
+                parse_mode='Markdown',
+                reply_markup=get_deposit_menu()
+            )
+            return
+
+        # For IDR (fiat) deposits, call Mobee API
+        if deposit_method == "IDR":
+            await update.message.reply_text(
+                "Processing your fiat deposit...",
+                parse_mode='Markdown'
+            )
+            
+            bank_code = "BNI"  # Confirm this is a valid bank code
+
+            try:
+                response = await getDepositAddress(amount, bank_code)
+                try:
+                    response_data = response.json()
+                    if response.status_code in (200, 201):
+                        text = (
+                            f"✅ *Fiat Deposit Initiated*\n\n"
+                            f"Amount: IDR {amount:,.2f}\n"
+                            f"Bank Code: {bank_code}\n"
+                            f"Transaction ID: {response_data.get('transaction_id', 'N/A')}\n\n"
+                            "You'll receive a confirmation once processed."
+                        )
+                    else:
+                        text = (
+                            f"❌ *Deposit Failed*\n\n"
+                            f"Error: {response_data.get('message', response.text)}\n"
+                            "Please try again or contact support."
+                        )
+                except ValueError:
+                    text = (
+                        f"❌ *Deposit Failed*\n\n"
+                        f"Error: Unable to parse response from server\n"
+                        "Please try again or contact support."
+                    )
+            except requests.RequestException as e:
+                text = (
+                    f"❌ *Deposit Failed*\n\n"
+                    f"Error: {str(e)}\n"
+                    "Please try again or contact support."
+                )
+
+            keyboard = [
+                [InlineKeyboardButton("↩️ Back to Deposit Options", callback_data="deposit")],
+                [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
+            ]
+            
+            await update.message.reply_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await update.message.reply_text(
+                f"⚠️ Deposit method {deposit_method} is not supported at this time.",
+                parse_mode='Markdown',
+                reply_markup=get_deposit_menu()
+            )
+
+        # Clear deposit state
+        context.user_data.pop('deposit_method', None)
+
+    except Exception as e:
+        logger.error(f"Error handling amount input: {str(e)}", exc_info=True)
+        await update.message.reply_text(
+            "Sorry, there was an error processing your deposit. Please try again.",
+            parse_mode='Markdown',
+            reply_markup=get_main_menu()
+        )
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback queries from inline keyboard."""
     query = update.callback_query
     
     try:
-        # Answer callback query immediately
         await query.answer()
         logger.info(f"Processing callback: {query.data}")
 
-        # Get or register user
         telegram_user = await register_user(update)
 
         if query.data == "balance":
+            from .utils import get_user_balance
             balance = await get_user_balance(telegram_user)
             text = f"💰 *Your Current Balance*\n\nAvailable: ${balance:.2f} USDT"
             await query.message.edit_text(
@@ -164,15 +235,6 @@ async def handle_callback(update: Update):
                 reply_markup=get_main_menu()
             )
 
-        elif query.data == "profit":
-            profit = await get_user_profit(telegram_user)
-            text = f"📈 *Your Total Profit*\n\nTotal: ${profit:.2f} USDT"
-            await query.message.edit_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=get_main_menu()
-            )
-        
         elif query.data == "deposit":
             text = "📥 *Deposit Methods*\n\nChoose your preferred deposit method:"
             await query.message.edit_text(
@@ -189,56 +251,12 @@ async def handle_callback(update: Update):
             )
 
         elif query.data.startswith('deposit_'):
-            try:
-                crypto = query.data.split('_')[1]
-                # Show loading message while getting address
-                await query.message.edit_text(
-                    "Getting deposit address...",
-                    parse_mode='Markdown'
-                )
-                
-                from .utils import getDepositAddress
-                address_info = await getDepositAddress(crypto)
-                
-                if address_info:
-                    memo_text = f"\n📝 *Memo/Tag:* `{address_info['memo']}`" if address_info.get('memo') else ""
-                    text = (
-                        f"🏦 *Deposit {crypto}*\n\n"
-                        f"💳 *Deposit Address:*\n`{address_info['address']}`"
-                        f"{memo_text}\n\n"
-                        f"🔄 *Network:* {address_info['network']}\n\n"
-                        "⚠️ *Important Notes:*\n"
-                        f"• Send only {crypto} to this address\n"
-                        "• Deposits will be credited after confirmations\n"
-                        "• Include memo/tag if provided\n\n"
-                        "Need help? Contact support."
-                    )
-                    
-                    keyboard = [
-                        [InlineKeyboardButton("↩️ Back to Deposit Options", callback_data="deposit")],
-                        [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
-                    ]
-                    
-                    await query.message.edit_text(
-                        text,
-                        parse_mode='Markdown',
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                else:
-                    await query.message.edit_text(
-                        "Sorry, deposit address not available. Please contact support.",
-                        parse_mode='Markdown',
-                        reply_markup=get_main_menu()
-                    )
-            except Exception as e:
-                logger.error(f"Error getting deposit address: {str(e)}", exc_info=True)
-                await query.message.edit_text(
-                    "Sorry, there was an error getting the deposit address. Please try again.",
-                    parse_mode='Markdown',
-                    reply_markup=get_main_menu()
-                )
-
-        
+            currency = query.data.split('_')[1]
+            context.user_data['deposit_method'] = currency
+            await query.message.edit_text(
+                f"💸 *Enter Deposit Amount*\n\nPlease type the amount you want to deposit in {currency}:",
+                parse_mode='Markdown'
+            )
 
         elif query.data == "support":
             support_username = "@AlgoAceSupport"
@@ -258,26 +276,8 @@ async def handle_callback(update: Update):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
-        elif query.data == "copy_trading":
-            support_username = "@AlgoAceSupport"
-            text = (
-                "🛟 *Copy Trading Option?*\n\n"
-                f"Contact our support team directly: {support_username}\n\n"
-                "Our team typically responds within 24 hours."
-            )
-            keyboard = [[InlineKeyboardButton("Contact Support", url=f"https://t.me/{support_username[1:]}")]]
-            await query.message.edit_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-
-        
-
-
         elif query.data == "history":
             try:
-                # Show loading message
                 await query.message.edit_text(
                     "Loading transaction history...",
                     parse_mode='Markdown'
@@ -327,74 +327,6 @@ async def handle_callback(update: Update):
                     reply_markup=get_main_menu()
                 )
 
-        elif query.data == "faq":
-            try:
-                await query.message.edit_text(
-                    "Loading FAQ categories...",
-                    parse_mode='Markdown'
-                )
-                
-                from .utils import getFaqCategories
-                categories = await getFaqCategories()
-                
-                text = "*❓ Frequently Asked Questions*\n\nSelect a category:"
-                keyboard = []
-                
-                for category in categories:
-                    keyboard.append([InlineKeyboardButton(
-                        category['category'].title(),
-                        callback_data=f"faq_{category['category']}"
-                    )])
-                
-                keyboard.append([InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")])
-                
-                await query.message.edit_text(
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except Exception as e:
-                logger.error(f"Error getting FAQ categories: {str(e)}", exc_info=True)
-                await query.message.edit_text(
-                    "Sorry, there was an error fetching the FAQ categories. Please try again.",
-                    parse_mode='Markdown',
-                    reply_markup=get_main_menu()
-                )
-
-        elif query.data.startswith("faq_"):
-            try:
-                category = query.data.split('_')[1]
-                await query.message.edit_text(
-                    f"Loading {category} FAQs...",
-                    parse_mode='Markdown'
-                )
-                
-                from .utils import getCategoryFaqs
-                faqs = await getCategoryFaqs(category)
-                
-                text = f"*{category.title()} FAQ:*\n\n"
-                for faq in faqs:
-                    text += f"*Q: {faq.question}*\n"
-                    text += f"A: {faq.answer}\n\n"
-                
-                keyboard = [
-                    [InlineKeyboardButton("↩️ Back to FAQ", callback_data="faq")],
-                    [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
-                ]
-                
-                await query.message.edit_text(
-                    text,
-                    parse_mode='Markdown',
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            except Exception as e:
-                logger.error(f"Error getting FAQs for category {category}: {str(e)}", exc_info=True)
-                await query.message.edit_text(
-                    "Sorry, there was an error fetching the FAQs. Please try again.",
-                    parse_mode='Markdown',
-                    reply_markup=get_main_menu()
-                )
-
     except Exception as e:
         logger.error(f"Error in callback handler: {str(e)}", exc_info=True)
         try:
@@ -404,7 +336,7 @@ async def handle_callback(update: Update):
                 reply_markup=get_main_menu()
             )
         except Exception:
-            pass  # If edit fails, we've already answered the callback query
+            pass
 
 @csrf_exempt
 @async_handler
@@ -417,11 +349,11 @@ async def telegram_webhook(request):
         update_data = json.loads(request.body.decode('utf-8'))
         update = Update.de_json(update_data, bot)
         
-        async with asyncio.timeout(30):  # 30 seconds timeout
-            if update.message and update.message.text == '/start':
-                await start(update)
-            elif update.callback_query:
-                await handle_callback(update)
+        # Initialize application if not already done
+        await initialize_application()
+        
+        async with asyncio.timeout(30):
+            await application.process_update(update)
             
         return HttpResponse('OK')
     except asyncio.TimeoutError:

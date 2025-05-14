@@ -9,7 +9,7 @@ def get_main_menu():
         ],
         [
             InlineKeyboardButton("📤 Request Withdrawal", callback_data='withdrawal'),
-            InlineKeyboardButton("📊 Transaction History", callback_data='history')
+            InlineKeyboardButton("📊 History", callback_data='history')
         ],
         [InlineKeyboardButton("📞 Customer Support", callback_data='support')],
     ]
@@ -19,12 +19,7 @@ def get_main_menu():
 def get_deposit_menu():
     keyboard = [
         [
-            InlineKeyboardButton("Bitcoin (BTC)", callback_data="deposit_BTC"),
-            InlineKeyboardButton("USDT", callback_data="deposit_USDT_TRC20")
-        ],
-        [
-            InlineKeyboardButton("XRP", callback_data="deposit_XRP"),
-            InlineKeyboardButton("Solana (SOL)", callback_data="deposit_SOL")
+            InlineKeyboardButton("📥 deposit IDR 💰", callback_data="deposit_IDR"),
         ],
         [InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")]
     ]

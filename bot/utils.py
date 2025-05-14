@@ -1,6 +1,6 @@
 from asgiref.sync import sync_to_async
-from core.models import CryptoAddress, Transaction, FAQ
-
+from bot.models import CryptoAddress, Transaction, FAQ, TelegramUser
+from .views import logger
 
 @sync_to_async
 def getDepositAddress(currency):
@@ -54,4 +54,37 @@ def create_transaction(user, amount, transaction_type, status='pending', wallet_
         return transaction
     except Exception as e:
         logger.error(f"Error creating transaction: {str(e)}", exc_info=True)
+        raise
+
+@sync_to_async
+def create_or_update_user(user_id, username, first_name, last_name):
+    """Async wrapper for database operations"""
+    try:
+        telegram_user, created = TelegramUser.objects.get_or_create(
+            telegram_id=user_id,
+            defaults={
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name
+            }
+        )
+        if not created:
+            telegram_user.username = username
+            telegram_user.first_name = first_name
+            telegram_user.last_name = last_name
+            telegram_user.save()
+        return telegram_user
+    except Exception as e:
+        logger.error(f"Database error in create_or_update_user: {str(e)}", exc_info=True)
+        raise
+
+
+@sync_to_async
+def get_user_balance(telegram_user):
+    """Async wrapper for getting user balance"""
+    try:
+        telegram_user.refresh_from_db()
+        return telegram_user.balance
+    except Exception as e:
+        logger.error(f"Error getting user balance: {str(e)}", exc_info=True)
         raise
