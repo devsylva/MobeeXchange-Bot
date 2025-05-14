@@ -14,6 +14,8 @@ import sys
 from telegram.request import HTTPXRequest
 from functools import wraps
 from .mobee_utils import getDepositAddress
+from threading import Lock
+import requests
 
 # Configure Windows event loop policy if needed
 if sys.platform == 'win32':
@@ -41,18 +43,19 @@ bot = Bot(
 # Global variable to hold the Application instance (initialized lazily)
 application = None
 
+application_lock = Lock()
+
 async def initialize_application():
-    """Initialize the Telegram Application instance and register handlers."""
     global application
-    if application is None:
-        logger.info("Initializing Telegram Application")
-        application = await Application.builder().bot(bot).build()
-        
-        # Register handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(handle_callback))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input))
-    
+    with application_lock:
+        if application is None:
+            logger.info("Initializing Telegram Application")
+            application = Application.builder().bot(bot).build()
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CallbackQueryHandler(handle_callback))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input))
+            await application.initialize()
+            logger.info("Telegram Application initialized")
     return application
 
 def async_handler(func):
