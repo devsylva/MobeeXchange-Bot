@@ -24,20 +24,20 @@ def getTransactionhistory(user, limit=10):
     return Transaction.objects.filter(user=user).order_by('-created_at')[:limit]
 
 
-@sync_to_async
-def getFaqCategories():
-    """Get all active FAQ categories"""
-    return FAQ.objects.filter(
-        is_active=True
-    ).values('category').distinct()
+# @sync_to_async
+# def getFaqCategories():
+#     """Get all active FAQ categories"""
+#     return FAQ.objects.filter(
+#         is_active=True
+#     ).values('category').distinct()
 
-@sync_to_async
-def getCategoryFaqs(category):
-    """Get all FAQs for a category"""
-    return FAQ.objects.filter(
-        category=category,
-        is_active=True
-    ).order_by('order')
+# @sync_to_async
+# def getCategoryFaqs(category):
+#     """Get all FAQs for a category"""
+#     return FAQ.objects.filter(
+#         category=category,
+#         is_active=True
+#     ).order_by('order')
 
 @sync_to_async
 def create_transaction(user, amount, transaction_type, status='pending', wallet_address=None, currency='USDT'):

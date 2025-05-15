@@ -13,7 +13,7 @@ import asyncio
 import sys
 from telegram.request import HTTPXRequest
 from functools import wraps
-from .mobee_utils import getDepositAddress
+from .mobee_utils import createFiatDeposit
 from threading import Lock
 import requests
 
@@ -129,7 +129,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Validate amount
         try:
-            amount = float(amount_text)
+            amount = int(amount_text)
             if amount <= 0 or amount < 10000:
                 raise ValueError("Amount must be positive and greater than or equal to 10000")
         except ValueError:
@@ -158,9 +158,8 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             
             bank_code = "BNI"  # Confirm this is a valid bank code
-
             try:
-                response = await getDepositAddress(amount, bank_code)
+                response = await createFiatDeposit(amount, bank_code)
                 try:
                     response_data = response.json()
                     if response.status_code in (200, 201):

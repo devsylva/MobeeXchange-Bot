@@ -33,7 +33,7 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "3e33-102-90-81-49.ngrok-free.app",
+    "582b-102-90-98-157.ngrok-free.app",
     "localhost"
 ]
 
