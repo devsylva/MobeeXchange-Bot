@@ -1,21 +1,21 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from .keyboards import get_main_menu, get_deposit_menu, get_withdrawal_menu
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from django.conf import settings
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from bot.models import TelegramUser
-import json
-from .keyboards import get_main_menu, get_deposit_menu
 from django.http import HttpResponse
 from asgiref.sync import sync_to_async
+from telegram.request import HTTPXRequest
+from .mobee_utils import createFiatDeposit
+from django.conf import settings
+from bot.models import TelegramUser
+import json
+from threading import Lock
+from functools import wraps
+import requests
 import logging
 import asyncio
 import sys
-from telegram.request import HTTPXRequest
-from functools import wraps
-from .mobee_utils import createFiatDeposit
-from threading import Lock
-import requests
 
 # Configure Windows event loop policy if needed
 if sys.platform == 'win32':
@@ -23,6 +23,9 @@ if sys.platform == 'win32':
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+DEPOSIT_MIN_AMOUNT = 10000
+BANK_CODE = "BNI"
 
 # Configure request parameters with more generous timeouts
 request_kwargs = {
@@ -122,16 +125,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user input for deposit amount."""
+    """Handle user input for deposit and withdraw amount."""
     try:
         telegram_user = await register_user(update)
         amount_text = update.message.text.strip()
 
-        # Validate amount
+        # Retrieve deposit or withdrawal method
+        deposit_method = context.user_data.get('deposit_method')
+        withdrawal_method = context.user_data.get('withdrawal_method')
+
+        if not deposit_method and not withdrawal_method:
+            await update.message.reply_text(
+                "⚠️ Session expired. Please select a deposit or withdrawal method first.",
+                parse_mode='Markdown',
+                reply_markup=get_main_menu()
+            )
+            return
+
+        if deposit_method:
+            await process_deposit(update, context, amount_text, deposit_method)
+        elif withdrawal_method:
+            await process_withdrawal(update, context, amount_text, withdrawal_method)
+
+    except Exception as e:
+        # logger.error(f"Error in handle_amount_input: {str(e)}", exc_info=True)
+        await update.message.reply_text(
+            "Sorry, there was an error processing your request. Please try again.",
+            parse_mode='Markdown',
+            reply_markup=get_main_menu()
+        )
+
+
+async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, deposit_method: str):
+    """Process deposit logic."""
+    if deposit_method == "IDR":
         try:
             amount = int(amount_text)
-            if amount <= 0 or amount < 10000:
-                raise ValueError("Amount must be positive and greater than or equal to 10000")
+            if amount < DEPOSIT_MIN_AMOUNT:
+                raise ValueError("Amount must be greater than or equal to 10,000")
         except ValueError:
             await update.message.reply_text(
                 "⚠️ Please enter a valid positive number greater than or equal to 10,000 for the deposit amount.",
@@ -140,83 +171,77 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
 
-        # Retrieve deposit method from user_data
-        deposit_method = context.user_data.get('deposit_method')
-        if not deposit_method:
+        await update.message.reply_text("Processing your fiat deposit...", parse_mode='Markdown')
+
+        try:
+            response_data = await createFiatDeposit(amount, BANK_CODE)  # Dictionary with 'data' key
+            data = response_data.get('data', {})  # Safely access 'data'
+            
+            text = (
+                f"✅ *Fiat Deposit Initiated*\n\n"
+                f"**Amount**: IDR {data.get('amount', amount):,.2f}\n"
+                f"**Bank Code**: {data.get('bank_code', BANK_CODE)}\n"
+                f"**Transaction ID**: {data.get('transaction_id', 'N/A')}\n"
+                f"**Account Name**: {data.get('account_name', 'N/A')}\n"
+                f"**Account Number**: {data.get('account_number', 'N/A')}\n"
+                f"**Status**: {data.get('status', 'Pending')}\n"
+                f"**Expires At**: {data.get('expired_at', 'N/A')}\n\n"
+                "Please transfer the amount to the provided account before the expiration time. "
+                "You'll receive a confirmation once the deposit is processed."
+            )
+        except requests.HTTPError as e:
+            text = (
+                f"❌ *Deposit Failed*\n\n"
+                f"Error: {e.response.text}\n"
+                "Please try again or contact support."
+            )
+        except Exception as e:
+            text = (
+                f"❌ *Deposit Failed*\n\n"
+                f"Error: {str(e)}\n"
+                "Please try again or contact support."
+            )
+
+        keyboard = [
+            [InlineKeyboardButton("↩️ Back to Deposit Options", callback_data="deposit")],
+            [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
+        ]
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+    context.user_data.pop('deposit_method', None)
+
+
+async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, withdrawal_method: str):
+    """Process withdrawal logic."""
+    if withdrawal_method == "USDT":
+        try:
+            amount = float(amount_text)
+            if amount <= 0:
+                raise ValueError("Amount must be positive")
+        except ValueError:
             await update.message.reply_text(
-                "⚠️ Session expired. Please select a deposit method again.",
+                "⚠️ Please enter a valid positive number for the withdrawal amount.",
                 parse_mode='Markdown',
-                reply_markup=get_deposit_menu()
+                reply_markup=get_withdrawal_menu()
             )
             return
 
-        # For IDR (fiat) deposits, call Mobee API
-        if deposit_method == "IDR":
-            await update.message.reply_text(
-                "Processing your fiat deposit...",
-                parse_mode='Markdown'
-            )
-            
-            bank_code = "BNI"  # Confirm this is a valid bank code
-            try:
-                response = await createFiatDeposit(amount, bank_code)
-                try:
-                    response_data = response.json()
-                    if response.status_code in (200, 201):
-                        text = (
-                            f"✅ *Fiat Deposit Initiated*\n\n"
-                            f"Amount: IDR {amount:,.2f}\n"
-                            f"Bank Code: {bank_code}\n"
-                            f"Transaction ID: {response_data.get('transaction_id', 'N/A')}\n\n"
-                            "You'll receive a confirmation once processed."
-                        )
-                    else:
-                        text = (
-                            f"❌ *Deposit Failed*\n\n"
-                            f"Error: {response_data.get('message', response.text)}\n"
-                            "Please try again or contact support."
-                        )
-                except ValueError:
-                    text = (
-                        f"❌ *Deposit Failed*\n\n"
-                        f"Error: Unable to parse response from server\n"
-                        "Please try again or contact support."
-                    )
-            except requests.RequestException as e:
-                text = (
-                    f"❌ *Deposit Failed*\n\n"
-                    f"Error: {str(e)}\n"
-                    "Please try again or contact support."
-                )
+        await update.message.reply_text("Processing your USDT withdrawal...", parse_mode='Markdown')
 
-            keyboard = [
-                [InlineKeyboardButton("↩️ Back to Deposit Options", callback_data="deposit")],
-                [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
-            ]
-            
-            await update.message.reply_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            await update.message.reply_text(
-                f"⚠️ Deposit method {deposit_method} is not supported at this time.",
-                parse_mode='Markdown',
-                reply_markup=get_deposit_menu()
-            )
-
-        # Clear deposit state
-        context.user_data.pop('deposit_method', None)
-
-    except Exception as e:
-        logger.error(f"Error handling amount input: {str(e)}", exc_info=True)
+        # Handle USDT withdrawal logic here
+        keyboard = [
+            [InlineKeyboardButton("↩️ Back to Withdrawal Options", callback_data="withdrawal")],
+            [InlineKeyboardButton("📞 Contact Support", callback_data="support")],
+        ]
         await update.message.reply_text(
-            "Sorry, there was an error processing your deposit. Please try again.",
+            "Withdrawal processing logic goes here.",
             parse_mode='Markdown',
-            reply_markup=get_main_menu()
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    context.user_data.pop('withdrawal_method', None)
+
+    
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard."""
     query = update.callback_query
@@ -245,6 +270,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_deposit_menu()
             )
 
+        elif query.data == "withdrawal":
+            text = "📤 *Withdraw Methods*\n\nChoose your preferred withdrawal method:"
+            await query.message.edit_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=get_withdrawal_menu()
+            )
+
         elif query.data == "main_menu":
             await query.message.edit_text(
                 "Main Menu",
@@ -257,6 +290,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['deposit_method'] = currency
             await query.message.edit_text(
                 f"💸 *Enter Deposit Amount*\n\nPlease type the amount you want to deposit in {currency}:",
+                parse_mode='Markdown'
+            )
+
+        elif query.data.startswith('withdraw_'):
+            coin = query.data.split('_')[1]
+            context.user_data['withdrawal_method'] = coin
+            await query.message.edit_text(
+                f"💸 *Enter Withdrawal Amount*\n\nPlease type the amount you want to withdraw in {coin}:",
                 parse_mode='Markdown'
             )
 
@@ -367,3 +408,7 @@ async def telegram_webhook(request):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
         return HttpResponse('Internal Server Error', status=500)
+
+
+
+
