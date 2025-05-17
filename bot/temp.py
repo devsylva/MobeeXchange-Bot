@@ -110,3 +110,14 @@ if __name__ == "__main__":
         print(json.dumps(fiat_deposit, indent=2))
     except Exception as e:
         print(f"Error: {str(e)}")
+
+
+
+import asyncio
+from bot.mobee_utils import createFiatDeposit
+
+async def test():
+    response = await createFiatDeposit(100000, "BNI")
+    print(response)
+
+asyncio.run(test())

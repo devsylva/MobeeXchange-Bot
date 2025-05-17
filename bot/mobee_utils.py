@@ -77,3 +77,4 @@ def createFiatDeposit(amount, bank_code):
     except requests.RequestException as e:
         print(f"Request failed: {str(e)}")
         raise
+
