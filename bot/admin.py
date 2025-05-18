@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import TelegramUser, DepositRequest
+from .models import TelegramUser, DepositRequest, WithdrawalRequest
 
 # Register your models here.
 class TelegramUserAdmin(admin.ModelAdmin):
@@ -19,5 +19,15 @@ class DepositRequestAdmin(admin.ModelAdmin):
     ordering = ('-created_at',)
 
 
+class WithdrawalRequestAdmin(admin.ModelAdmin):
+    list_display = ('data', 'currency', 'amount', 'address', 
+                   'txn_hash', 'created_at', 'status')
+    search_fields = ('data', 'currency', 'address')
+    list_filter = ('status',)
+    readonly_fields = ('created_at',)
+    ordering = ('-created_at',)
+
+
 admin.site.register(TelegramUser, TelegramUserAdmin)
 admin.site.register(DepositRequest, DepositRequestAdmin)
+admin.site.register(WithdrawalRequest)

@@ -8,7 +8,7 @@ from asgiref.sync import sync_to_async
 from telegram.request import HTTPXRequest
 from .mobee_utils import createFiatDeposit
 from django.conf import settings
-from bot.models import TelegramUser, DepositRequest
+from bot.models import TelegramUser, DepositRequest, WithdrawalRequest
 from .utils import create_or_update_user, get_user_balance, create_deposit_request
 import json
 from threading import Lock
@@ -156,44 +156,6 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=get_main_menu()
         )
 
-async def view_payment_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the 'View Payment Details' button."""
-    print("view_payment_details is called")
-    query = update.callback_query
-    await query.answer()
-
-    telegram_user = await register_user(update)
-    try:
-        print("code is here")
-        # Fetch the latest deposit request for the user
-        deposit_request = await sync_to_async(
-            lambda: DepositRequest.objects.filter(user=telegram_user).latest('created_at')
-        )()
-        # Display the payment details
-        text = (
-            f"✅ *Payment Details:*\n\n"
-            f"• Amount: {deposit_request.amount}\n"
-            f"• Bank Code: {deposit_request.bank_code}\n"
-            f"• Account Name: `{deposit_request.account_name}` * (tap to copy)\n"
-            f"• Account Number: `{deposit_request.account_number}` * (tap to copy)\n"
-            f"• Expiry: {deposit_request.expired_at}\n\n"
-            "Please make the payment before the expiry time."
-        )
-        await query.edit_message_text(text, parse_mode='Markdown')
-
-    except DepositRequest.DoesNotExist:
-        # Handle the case where the deposit instance is not found
-        await query.edit_message_text(
-            "⚠️ No payment details found. Please make sure you clicked the deposit link first.",
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        # Handle any other exceptions
-        await query.edit_message_text(
-            f"⚠️ An error occurred: {str(e)}",
-            parse_mode='Markdown'
-        )
-
 async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, deposit_method: str):
     """Process deposit logic."""
     telegram_user = await register_user(update)
@@ -217,7 +179,8 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
             return
 
         # Generate a link for for the user to complete deposit
-        deposit_link = f"http://{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{deposit_method}"
+        deposit_link = f"http://{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{IDR_BANK_CODE}"
+        print(deposit_link)
         
         text = (
             f"✅ *Fiat Deposit Initiated*\n\n"
@@ -230,8 +193,8 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
 
         # Add a button for "View Payment Details"
         reply_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Complete Deposit", url=deposit_link)],
-            [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
+            [InlineKeyboardButton("Generate Account details", url="https://google.com")],
+            # [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
         ])
         
         await update.message.reply_text(
@@ -334,7 +297,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif query.data == "support":
             text = (
                 "🛟 *Need Help?*\n\n"
-                f"Contact our support team directly: {support_username}\n\n"
+                f"Contact our support team directly\n\n"
                 "Please include:\n"
                 "• Your issue description\n"
                 "• Transaction ID (if applicable)\n"
@@ -361,8 +324,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ *Payment Details:*\n\n"
                     f"• Amount: {deposit_request.amount}\n"
                     f"• Bank: {deposit_request.bank_code}\n"
-                    f"• Account Name: {deposit_request.account_name}\n"
-                    f"• Account Number: {deposit_request.account_number}\n"
+                    f"• Account Name: `{deposit_request.account_name}`\n"  # Make account name copiable
+                    f"• Account Number: `{deposit_request.account_number}`\n"  # Make account number copiable
                     f"• Expiry: {deposit_request.expired_at}\n\n"
                     "Please make the payment before the expiry time."
                 )
@@ -381,56 +344,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
 
-        # elif query.data == "history":
-        #     try:
-        #         await query.message.edit_text(
-        #             "Loading transaction history...",
-        #             parse_mode='Markdown'
-        #         )
-                
-        #         from .utils import getTransactionhistory
-        #         transactions = await getTransactionhistory(telegram_user)
-                
-        #         if not transactions:
-        #             await query.message.edit_text(
-        #                 "No transaction history found.",
-        #                 parse_mode='Markdown',
-        #                 reply_markup=get_main_menu()
-        #             )
-        #             return
+        elif query.data == "history":
+            try:
+                # Fetch the last 5 deposit requests for the user
+                last_deposits = await sync_to_async(
+                    lambda: list(DepositRequest.objects.filter(user=telegram_user).order_by('-created_at')[:5])
+                )()
 
-        #         text = "*📊 Recent Transactions:*\n\n"
-        #         for tx in transactions[:10]:
-        #             status_emoji = {
-        #                 'pending': '⏳',
-        #                 'completed': '✅',
-        #                 'failed': '❌',
-        #                 'cancelled': '🚫'
-        #             }.get(tx.status, '❓')
-                    
-        #             text += (
-        #                 f"{status_emoji} *{tx.transaction_type.title()}*\n"
-        #                 f"Amount: {tx.amount} {tx.currency}\n"
-        #                 f"Status: {tx.status.title()}\n"
-        #                 f"Date: {tx.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
-        #             )
-                
-        #         keyboard = [
-        #             [InlineKeyboardButton("↩️ Back to Menu", callback_data="main_menu")]
-        #         ]
-                
-        #         await query.message.edit_text(
-        #             text,
-        #             parse_mode='Markdown',
-        #             reply_markup=InlineKeyboardMarkup(keyboard)
-        #         )
-        #     except Exception as e:
-        #         logger.error(f"Error getting transaction history: {str(e)}", exc_info=True)
-        #         await query.message.edit_text(
-        #             "Sorry, there was an error fetching your transaction history. Please try again.",
-        #             parse_mode='Markdown',
-        #             reply_markup=get_main_menu()
-        #         )
+                # Fetch the last 5 withdrawal requests for the user
+                last_withdrawals = await sync_to_async(
+                    lambda: list(WithdrawalRequest.objects.filter(user=telegram_user).order_by('-created_at')[:5])
+                )()
+
+                # Format the deposit history
+                deposit_history = "\n".join([
+                    f"• Amount: {deposit.amount}, Status: {deposit.status}, Date: {deposit.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    for deposit in last_deposits
+                ]) or "No deposit history available."
+
+                # Format the withdrawal history
+                withdrawal_history = "\n".join([
+                    f"• Amount: {withdrawal.amount}, Status: {withdrawal.status}, Date: {withdrawal.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    for withdrawal in last_withdrawals
+                ]) or "No withdrawal history available."
+
+                # Combine the histories into a single message
+                text = (
+                    f"📜 *Transaction History*\n\n"
+                    f"📥 *Last 5 Deposits:*\n{deposit_history}\n\n"
+                    f"📤 *Last 5 Withdrawals:*\n{withdrawal_history}"
+                )
+
+                # Send the history message
+                await query.message.edit_text(
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=get_main_menu()
+                )
+
+            except Exception as e:
+                logger.error(f"Error fetching transaction history: {str(e)}", exc_info=True)
+                await query.message.edit_text(
+                    "⚠️ An error occurred while fetching your transaction history. Please try again later.",
+                    parse_mode='Markdown',
+                    reply_markup=get_main_menu()
+                )
+        
 
     except Exception as e:
         logger.error(f"Error in callback handler: {str(e)}", exc_info=True)
@@ -479,10 +438,6 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
         # Get the user from the database
         user = TelegramUser.objects.get(telegram_id=telegram_id)
         
-        # Example: Hardcoded amount and bank code (replace with dynamic values if needed)
-        amount = 100000  # Example amount
-        bank_code = "BNI"
-        
         # Call the createFiatDeposit function
         response_data = createFiatDeposit(amount, bank_code)
         
@@ -498,6 +453,23 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
             expired_at=response_data['data']['expired_at'],
             status="pending"
         )
+
+        # Notify the bot to send a message with the "View Payment Details" button
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        async def send_message():
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "✅ Your deposit account has been successfully created!\n\n"
+                    "Click the 'View Payment Details' button below to see your payment details."
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
+                ])
+            )
+
+        # Run the coroutine
+        asyncio.run(send_message())
         
         # Redirect the user back to the bot with a success message
         bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
