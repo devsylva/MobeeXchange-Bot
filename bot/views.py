@@ -58,7 +58,6 @@ async def initialize_application():
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CallbackQueryHandler(handle_callback))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input))
-            application.add_handler(CallbackQueryHandler(view_payment_details, pattern='view_payment_details'))
             await application.initialize()
             logger.info("Telegram Application initialized")
     return application
@@ -138,7 +137,7 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if not deposit_method and not withdrawal_method:
             await update.message.reply_text(
-                "⚠️ Session expired. Please select a deposit or withdrawal method first.",
+                "⚠️ Session expired. Invalid Input",
                 parse_mode='Markdown',
                 reply_markup=get_main_menu()
             )
@@ -174,9 +173,9 @@ async def view_payment_details(update: Update, context: ContextTypes.DEFAULT_TYP
         text = (
             f"✅ *Payment Details:*\n\n"
             f"• Amount: {deposit_request.amount}\n"
-            f"• Bank: {deposit_request.bank_code}\n"
-            f"• Account Name: {deposit_request.account_name}\n"
-            f"• Account Number: {deposit_request.account_number}\n"
+            f"• Bank Code: {deposit_request.bank_code}\n"
+            f"• Account Name: `{deposit_request.account_name}` * (tap to copy)\n"
+            f"• Account Number: `{deposit_request.account_number}` * (tap to copy)\n"
             f"• Expiry: {deposit_request.expired_at}\n\n"
             "Please make the payment before the expiry time."
         )
@@ -218,26 +217,26 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
             return
 
         # Generate a link for for the user to complete deposit
-        deposit_link = f"{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{deposit_method}"
-        print(deposit_link)
-
+        deposit_link = f"http://{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{deposit_method}"
+        
         text = (
             f"✅ *Fiat Deposit Initiated*\n\n"
-            f"Please click the link below to complete your deposit:\n\n"
-            f"[Complete Deposit] (https://{deposit_link})\n\n"
             "⚠️ *Important:*\n"
-            "1. Click the link above to initiate your deposit.\n"
+            "1. Click the 'Complete Deposit' button below to initiate your deposit.\n"
             "2. After being redirected back, click the 'View Payment Details' button to see your payment details."
         )
 
-        await update.message.reply_text(text, parse_mode='Markdown')
+        # await update.message.reply_text(text, parse_mode='Markdown')
 
         # Add a button for "View Payment Details"
         reply_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Complete Deposit", url=deposit_link)],
             [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
         ])
+        
         await update.message.reply_text(
-            "Click the button below after completing the deposit link:",
+            text,
+            parse_mode='Markdown',
             reply_markup=reply_markup
         )
 
@@ -349,6 +348,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
+        elif query.data == "view_payment_details":
+            telegram_user = await register_user(update)
+            try:
+                print("code is here")
+                # Fetch the latest deposit request for the user
+                deposit_request = await sync_to_async(
+                    lambda: DepositRequest.objects.filter(user=telegram_user).latest('created_at')
+                )()
+                # Display the payment details
+                text = (
+                    f"✅ *Payment Details:*\n\n"
+                    f"• Amount: {deposit_request.amount}\n"
+                    f"• Bank: {deposit_request.bank_code}\n"
+                    f"• Account Name: {deposit_request.account_name}\n"
+                    f"• Account Number: {deposit_request.account_number}\n"
+                    f"• Expiry: {deposit_request.expired_at}\n\n"
+                    "Please make the payment before the expiry time."
+                )
+                await query.edit_message_text(text, parse_mode='Markdown')
+
+            except DepositRequest.DoesNotExist:
+                # Handle the case where the deposit instance is not found
+                await query.edit_message_text(
+                    "⚠️ No payment details found. Please make sure you clicked the deposit link first.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                # Handle any other exceptions
+                await query.edit_message_text(
+                    f"⚠️ An error occurred: {str(e)}",
+                    parse_mode='Markdown'
+                )
+
         # elif query.data == "history":
         #     try:
         #         await query.message.edit_text(
@@ -439,7 +471,6 @@ async def telegram_webhook(request):
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}", exc_info=True)
         return HttpResponse('Internal Server Error', status=500)
-
 
 
 def create_deposit_view(request, telegram_id, amount, bank_code):
