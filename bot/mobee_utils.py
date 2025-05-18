@@ -43,7 +43,7 @@ def generate_mobee_auth_headers(method, url, body=None):
     return headers
 
 
-@sync_to_async
+# @sync_to_async
 def createFiatDeposit(amount, bank_code):
     url = "https://open-api.mobee.io/v1/wallets/fiat-deposits"
     method = "POST"
@@ -77,4 +77,6 @@ def createFiatDeposit(amount, bank_code):
     except requests.RequestException as e:
         print(f"Request failed: {str(e)}")
         raise
+
+
 

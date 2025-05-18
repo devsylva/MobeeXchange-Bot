@@ -33,7 +33,7 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "7a12-102-90-79-60.ngrok-free.app",
+    "6ec8-102-90-102-198.ngrok-free.app",
     "localhost"
 ]
 
@@ -128,11 +128,14 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+YOUR_DOMAIN = env("YOUR_DOMAIN")
+
 # Mobee Credentials
 MOBEE_API_KEY = env("MOBEE_API_KEY")
 MOBEE_API_SECRET = env("MOBEE_API_SECRET")
 
 # Telegram Bot Token
+TELEGRAM_BOT_USERNAME = env("TELEGRAM_BOT_USERNAME")
 TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN")
 TELEGRAM_WEBHOOK_URL = env("TELEGRAM_WEBHOOK_URL")
 TELEGRAM_WEBHOOK_PATH = env("TELEGRAM_WEBHOOK_PATH")

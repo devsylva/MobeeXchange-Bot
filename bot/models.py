@@ -14,83 +14,23 @@ class TelegramUser(models.Model):
         return f"{self.username} or {self.telegram_id}"
 
 
-class CryptoAddress(models.Model):
-    CURRENCY_CHOICES = [
-        ('BTC', 'Bitcoin'),
-        ('USDT_TRC20', 'USDT TRC20'),
-        ('USDT_ERC20', 'USDT ERC20'),
-        ('XRP', 'Ripple'),
-        ('SOL', 'Solana'),
-    ]
-
-    NETWORK_CHOICES = [
-        ('BITCOIN', 'Bitcoin'),
-        ('TRC20', 'Tron TRC20'),
-        ('ERC20', 'Ethereum ERC20'),
-        ('XRP', 'Ripple'),
-        ('SOLANA', 'Solana'),
-    ]
-
-    currency = models.CharField(max_length=20, choices=CURRENCY_CHOICES, unique=True)
-    network = models.CharField(max_length=20, choices=NETWORK_CHOICES)
-    address = models.CharField(max_length=255)
-    is_active = models.BooleanField(default=True)
-    memo = models.CharField(max_length=100, blank=True, null=True)  # For currencies that need memo/tag
-    created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
-    updated_at = models.DateTimeField(auto_now=True, blank=True, null=True)
-
-    class Meta:
-        verbose_name = 'Crypto Address'
-        verbose_name_plural = 'Crypto Addresses'
-
-    def __str__(self):
-        return f"{self.get_currency_display()} - {self.address[:10]}..."
-
-
-class Transaction(models.Model):
-    TRANSACTION_TYPES = [
-        ('deposit', 'Deposit'),
-        ('withdrawal', 'Withdrawal')
-    ]
-    STATUS_CHOICES = [
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-        ('cancelled', 'Cancelled')
-    ]
-
+class DepositRequest(models.Model):
+    STATUS = (
+        ("pending", "Pending"),
+        ("completed", "Completed"),
+        ("failed", "Failed"),
+    )
     user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE)
-    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
-    currency = models.CharField(max_length=20)
-    amount = models.DecimalField(max_digits=18, decimal_places=8)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    address = models.CharField(max_length=255)  # For withdrawals
-    tx_hash = models.CharField(max_length=255, blank=True, null=True)
+    deposit_id = models.CharField(max_length=100, unique=True)
+    transaction_id = models.CharField(max_length=100, unique=True)
+    amount = models.FloatField()
+    status = models.CharField(max_length=10, choices=STATUS, default="pending")
+    account_name = models.CharField(max_length=100, null=True, blank=True)
+    account_number = models.CharField(max_length=20, null=True, blank=True)
+    bank_code = models.CharField(max_length=10, null=True, blank=True)
+    expired_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def __str__(self):
-        return f"{self.transaction_type} - {self.amount} {self.currency}"
-
-
-# FAQ model for easy management
-class FAQ(models.Model):
-    CATEGORY_CHOICES = [
-        ('general', 'General'),
-        ('trading', 'Trading'),
-        ('deposit', 'Deposits'),
-        ('withdrawal', 'Withdrawals'),
-        ('security', 'Security')
-    ]
-
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
-    question = models.CharField(max_length=255)
-    answer = models.TextField()
-    order = models.IntegerField(default=0)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ['category', 'order']
-
-    def __str__(self):
-        return f"{self.category}: {self.question}"
+        return f"Deposit Request of {self.amount} for {self.user.username}"
