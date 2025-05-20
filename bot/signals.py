@@ -2,6 +2,8 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import DepositRequest, TelegramUser
 from django.conf import settings
+from telegram import Bot
+import asyncio
 
 @receiver(post_save, sender=DepositRequest)
 def update_user_balance(sender, instance, **kwargs):

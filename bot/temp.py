@@ -47,7 +47,7 @@ def sign_request(method, url, body=None):
         "X-Request-Signature": signature,
         "X-Request-Timestamp": timestamp
     }
-    
+
     return headers
 
 def create_fiat_deposit(amount, bank_code):
@@ -81,6 +81,7 @@ def create_fiat_deposit(amount, bank_code):
     # Generate headers
     headers = sign_request(method, url, body_json)
     headers["Content-Type"] = "application/json"
+    print(f"Request headers: {headers}")
     
     try:
         # Make the POST request
@@ -98,6 +99,7 @@ def create_fiat_deposit(amount, bank_code):
     except requests.RequestException as e:
         print(f"Request failed: {str(e)}")
         raise
+
 
 # Execute the request
 if __name__ == "__main__":

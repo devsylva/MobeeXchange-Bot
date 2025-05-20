@@ -51,13 +51,14 @@ def createFiatDeposit(amount, bank_code):
         "amount": amount,
         "bank_code": bank_code
     }
-    
+    print(f"Request body: {body}")
     body_json = json.dumps(body, separators=(',', ':'))
-
+    print(f"Request body JSON: {body_json}")
     # Generate headers
     headers = generate_mobee_auth_headers(method, url, body_json)
     headers["Content-Type"] = "application/json"
     headers["accept"] = "application/json"
+    print(f"Request headers: {headers}")
     
     try:
         # Make the POST request

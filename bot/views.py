@@ -138,6 +138,9 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await handle_wallet_address(update, context)
             return
 
+        # Clear the awaiting_wallet_address flag if set
+        context.user_data.pop('awaiting_wallet_address', None)
+        
         # Retrieve deposit or withdrawal method
         deposit_method = context.user_data.get('deposit_method')
         withdrawal_method = context.user_data.get('withdrawal_method')
@@ -239,7 +242,7 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         # Store the withdrawal amount in context and prompt for wallet address
-        context.user_data['withdrawal_amount'] = amount - NETWORK_FEE
+        context.user_data['withdrawal_amount'] = amount
         context.user_data['withdrawal_method'] = withdrawal_method
 
         await update.message.reply_text(
