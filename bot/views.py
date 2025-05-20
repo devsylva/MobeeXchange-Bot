@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 IDR_DEPOSIT_MIN_AMOUNT = 10000
 IDR_BANK_CODE = "BNI"
-BEP20_NETWORK_ID = 56
+BEP20_NETWORK_ID = 12
 NETWORK_FEE = 1.5
 
 # Configure request parameters with more generous timeouts
@@ -81,6 +81,7 @@ def async_handler(func):
             return HttpResponse("Internal Server Error", status=500)
     return wrapped
 
+
 async def register_user(update: Update):
     """Register or update user."""
     try:
@@ -94,6 +95,7 @@ async def register_user(update: Update):
     except Exception as e:
         logger.error(f"Error in register_user: {str(e)}", exc_info=True)
         raise
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
@@ -126,6 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Sorry, there was an error. Please try again later.",
             parse_mode='Markdown'
         )
+
 
 async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle user input for deposit and withdrawal amounts or wallet addresses."""
@@ -233,7 +236,7 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         # Check if the user has sufficient balance (including network fee)
-        if telegram_user.balance < amount:
+        if telegram_user.balance < (amount + NETWORK_FEE):
             await update.message.reply_text(
                 f"⚠️ Insufficient balance for withdrawal. Remember, the network fee is ${NETWORK_FEE:.2f}.",
                 parse_mode='Markdown',
@@ -283,7 +286,7 @@ async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TY
     telegram_id = telegram_user.telegram_id
     amount = int(float(context.user_data.get('withdrawal_amount', 0)))  # Convert to integer
     currency = context.user_data.get('withdrawal_method', '')
-    network_id = 56  # BEP-20 network ID
+    network_id = BEP20_NETWORK_ID
 
     # URL-encode the wallet address
     encoded_wallet_address = quote(wallet_address)
@@ -372,7 +375,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Screenshots (if relevant)\n\n"
                 "Our team typically responds within 24 hours."
             )
-            keyboard = [[InlineKeyboardButton("Contact Support", url=f"https://t.me/+2F_2WCAvbQyMDhk")]]
+            keyboard = [[InlineKeyboardButton("Contact Support", url=f"https://t.me/+sdwvApKiS39jZjI0")]]
             await query.message.edit_text(
                 text,
                 parse_mode='Markdown',
