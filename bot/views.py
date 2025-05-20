@@ -575,6 +575,10 @@ def create_withdrawal_view(request, telegram_id, currency, amount, address, netw
             explorer_url=response_data['data']['explorer_url']
         )
 
+        # Update the user's balance
+        user.balance -= amount + NETWORK_FEE
+        user.save()
+
         # Notify the bot to send a message with the "View Payment Details" button
         bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
         async def send_message():
