@@ -236,7 +236,7 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         # Check if the user has sufficient balance (including network fee)
-        if telegram_user.balance < (amount + NETWORK_FEE):
+        if telegram_user.balance < amount:
             await update.message.reply_text(
                 f"⚠️ Insufficient balance for withdrawal. Remember, the network fee is ${NETWORK_FEE:.2f}.",
                 parse_mode='Markdown',
@@ -245,7 +245,7 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         # Store the withdrawal amount in context and prompt for wallet address
-        context.user_data['withdrawal_amount'] = amount
+        context.user_data['withdrawal_amount'] = amount - NETWORK_FEE
         context.user_data['withdrawal_method'] = withdrawal_method
 
         await update.message.reply_text(
@@ -399,7 +399,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"• Expiry: {deposit_request.expired_at}\n\n"
                     "Please make the payment before the expiry time."
                 )
-                await query.edit_message_text(text, parse_mode='Markdown')
+                reply_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Main Menu", callback_data="main_menu")]
+                ])
+                await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
 
             except DepositRequest.DoesNotExist:
                 # Handle the case where the deposit instance is not found
@@ -563,12 +566,13 @@ def create_withdrawal_view(request, telegram_id, currency, amount, address, netw
         # Save the withdrawal request in the database
         WithdrawalRequest.objects.create(
             user=user,
-            withdrawal_id=response_data['data']['id'],
-            transaction_id=response_data['data']['transaction_id'],
+            transaction_id=response_data['data']['id'],
+            currency=response_data['data']['currency'],
             amount=response_data['data']['amount'],
+            fee=response_data['data']['fee'],
             address=response_data['data']['address'],
-            network_id=response_data['data']['network_id'],
-            status="pending"
+            network_name=response_data['data']['network_name'],
+            explorer_url=response_data['data']['explorer_url']
         )
 
         # Notify the bot to send a message with the "View Payment Details" button

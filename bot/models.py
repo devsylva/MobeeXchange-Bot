@@ -41,19 +41,17 @@ class DepositRequest(models.Model):
 class WithdrawalRequest(models.Model):
     STATUS_CHOICES = [
         ("Pending", "Pending"),
-        ("Confirmed", "Confirmed"),
+        ("Completed", "Completed"),
         ("Rejected", "Rejected"),
     ]
     user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE, null=True, blank=True)
-    data = models.IntegerField()  # Assuming this is an ID or unique identifier
+    transaction_id = models.IntegerField()  # Assuming this is an ID or unique identifier
     currency = models.CharField(max_length=10)  # e.g., "USDC"
     amount = models.DecimalField(max_digits=20, decimal_places=8)  # For precise amounts
+    fee = models.DecimalField(max_digits=20, decimal_places=8)
     address = models.CharField(max_length=255)  # Wallet address
-    txn_hash = models.CharField(max_length=255, null=True, blank=True)  # Transaction hash
     created_at = models.DateTimeField(auto_now_add=True)  # Automatically set on creation
-    confirmed_at = models.DateTimeField(null=True, blank=True)  # Set when confirmed
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="Pending")  # Status of the request
-    rejected_reason = models.TextField(null=True, blank=True)  # Reason for rejection
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="Completed")  # Status of the request
     network_name = models.CharField(max_length=50)  # e.g., "Polygon Mumbai 1"
     explorer_url = models.URLField(max_length=500, null=True, blank=True)  # Link to transaction explorer
 

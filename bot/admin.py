@@ -20,9 +20,9 @@ class DepositRequestAdmin(admin.ModelAdmin):
 
 
 class WithdrawalRequestAdmin(admin.ModelAdmin):
-    list_display = ('data', 'currency', 'amount', 'address', 
+    list_display = ('user', 'currency', 'amount', 'address', 
                    'txn_hash', 'created_at', 'status')
-    search_fields = ('data', 'currency', 'address')
+    search_fields = ('user__username', 'currency', 'address')
     list_filter = ('status',)
     readonly_fields = ('created_at',)
     ordering = ('-created_at',)
