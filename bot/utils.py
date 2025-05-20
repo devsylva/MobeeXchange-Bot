@@ -1,5 +1,9 @@
 from asgiref.sync import sync_to_async
-from bot.models import TelegramUser, DepositRequest
+from bot.models import TelegramUser, ActionToken
+from uuid import uuid4
+from django.utils.timezone import now
+from datetime import timedelta
+from bot.models import ActionToken
 import logging  
 
 loggger = logging.getLogger(__name__)
@@ -37,23 +41,34 @@ def get_user_balance(telegram_user):
         logger.error(f"Error getting user balance: {str(e)}", exc_info=True)
         raise
 
-
 @sync_to_async
-def create_deposit_request(telegram_user, deposit_id, transaction_id, amount, account_name, account_number, bank_code, expired_at):
-    """Async wrapper for creating deposit request"""
+def generate_action_token(user, action, expiration_minutes=5):
+    """
+    Generate a one-time token for a specific action (withdrawal or deposit).
+    
+    Args:
+        user (TelegramUser): The user for whom the token is generated.
+        action (str): The action type ('withdrawal' or 'deposit').
+        expiration_minutes (int): Token expiration time in minutes.
+    
+    Returns:
+        str: The generated token.
+    """
+    token = str(uuid4())
+    ActionToken.objects.create(
+        user=user,
+        token=token,
+        action=action,
+    )
+    return token
+
+
+def is_tokenValid(token, action):
+    """Validate a one-time token for a specific action."""
     try:
-        deposit_request = DepositRequest(
-            user=user,
-            deposit_id=deposit_id,
-            transaction_id=transaction_id,
-            amount=amount,
-            account_name=account_name,
-            account_number=account_number,
-            bank_code=bank_code,
-            expired_at=expired_at
-        )
-        deposit_request.save()
-        return deposit_request
-    except Exception as e:
-        logger.error(f"Database error in create_deposit_request: {str(e)}", exc_info=True)
-        raise
+        action_token = ActionToken.objects.get(token=token, action=action)
+        if action_token.is_valid():
+            return True
+        return False
+    except ActionToken.DoesNotExist:
+        return False

@@ -1,4 +1,6 @@
 from django.db import models
+from django.utils.timezone import now
+from datetime import timedelta
 
 # Create your models here.
 class TelegramUser(models.Model):
@@ -57,3 +59,24 @@ class WithdrawalRequest(models.Model):
 
     def __str__(self):
         return f"Withdrawal {self.data} - {self.status}"
+
+
+
+class ActionToken(models.Model):
+    ACTION_CHOICES = [
+        ('withdrawal', 'Withdrawal'),
+        ('deposit', 'Deposit'),
+    ]
+
+    user = models.ForeignKey(TelegramUser, on_delete=models.CASCADE)
+    token = models.CharField(max_length=100, unique=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def is_valid(self):
+        """Check if the token is valid (not used and not expired)."""
+        return self.is_used
+
+    def __str__(self):
+        return f"Token for {self.user.username} - {self.action} - {'Used' if self.is_used else 'Valid'}"

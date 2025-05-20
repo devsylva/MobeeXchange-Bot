@@ -9,7 +9,7 @@ from telegram.request import HTTPXRequest
 from .mobee_utils import createFiatDeposit, createCryptoWithdrawal
 from django.conf import settings
 from bot.models import TelegramUser, DepositRequest, WithdrawalRequest
-from .utils import create_or_update_user, get_user_balance, create_deposit_request
+from .utils import create_or_update_user, get_user_balance, generate_action_token, is_Valid
 import json
 from threading import Lock
 from urllib.parse import quote
@@ -26,7 +26,8 @@ if sys.platform == 'win32':
 # Configure logging
 logger = logging.getLogger(__name__)
 
-IDR_DEPOSIT_MIN_AMOUNT = 10000
+IDR_DEPOSIT_MIN_AMOUNT = 50000
+USDT_WITHDRAWAL_MIN_AMOUNT = 2.5
 IDR_BANK_CODE = "BNI"
 BEP20_NETWORK_ID = 12
 NETWORK_FEE = 1.5
@@ -191,9 +192,12 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
             )
             return
 
+
+        # Genrate a one-time token for deposit
+        token = await generate_action_token(telegram_user, action='deposit')
+
         # Generate a link for for the user to complete deposit
-        deposit_link = f"{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{IDR_BANK_CODE}"
-        print(deposit_link)
+        deposit_link = f"{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{IDR_BANK_CODE}/{token}/"
         
         text = (
             f"✅ *Fiat Deposit Initiated*\n\n"
@@ -225,8 +229,14 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             # Validate withdrawal amount
             amount = float(amount_text)
-            if amount <= 0:
-                raise ValueError("Amount must be positive")
+            if amount < USDT_WITHDRAWAL_MIN_AMOUNT:
+                # raise ValueError("Amount must be greater than or equal to 10,000")
+                await update.message.reply_text(
+                    f"⚠️ The minimum withdrawal amount is {USDT_WITHDRAWAL_MIN_AMOUNT} USDT.",
+                    parse_mode='Markdown',
+                    reply_markup=get_deposit_menu()
+                )
+                return
         except ValueError:
             await update.message.reply_text(
                 "⚠️ Please enter a valid positive number for the withdrawal amount.",
@@ -291,8 +301,11 @@ async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TY
     # URL-encode the wallet address
     encoded_wallet_address = quote(wallet_address)
 
+    # Generate a one-time token for withdrawal
+    token = generate_action_token(telegram_user, action='withdrawal')
+
     # Generate the URL for the create_withdrawal_view
-    withdrawal_url = f"{settings.YOUR_DOMAIN}/create-withdraw/{telegram_id}/{currency}/{amount}/{encoded_wallet_address}/{network_id}"
+    withdrawal_url = f"{settings.YOUR_DOMAIN}/create-withdraw/{telegram_id}/{currency}/{amount}/{encoded_wallet_address}/{network_id}/{token}/"
 
     # Create an inline keyboard button
     keyboard = [
@@ -505,12 +518,30 @@ async def telegram_webhook(request):
         return HttpResponse('Internal Server Error', status=500)
 
 
-def create_deposit_view(request, telegram_id, amount, bank_code):
+def create_deposit_view(request, telegram_id, amount, bank_code, token):
     """Handle fiat deposit creation."""
+    used = is_Valid(token, action='deposit')
+    bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+    if used:
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        async def send_message():
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "Invalid token. Please try again."
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Deposit", callback_data="deposit")],
+                ])
+            )
+
+        # Run the coroutine
+        asyncio.run(send_message())
+        return redirect(bot_redirect_url)
+  
     try:
         # Get the user from the database
         user = TelegramUser.objects.get(telegram_id=telegram_id)
-        
         # Call the createFiatDeposit function
         response_data = createFiatDeposit(amount=amount, bank_code=bank_code)
         
@@ -526,6 +557,11 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
             expired_at=response_data['data']['expired_at'],
             status="pending"
         )
+
+        # mark token as used
+        action_token = ActionToken.objects.get(token=token)
+        action_token.is_used = True
+        action_token.save()
 
         # Notify the bot to send a message with the "View Payment Details" button
         bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
@@ -544,8 +580,7 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
         # Run the coroutine
         asyncio.run(send_message())
         
-        # Redirect the user back to the bot with a success message
-        bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+        
         return redirect(bot_redirect_url)
     
     except TelegramUser.DoesNotExist:
@@ -554,12 +589,55 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
         return HttpResponse(f"Error: {str(e)}", status=500)
 
 
-def create_withdrawal_view(request, telegram_id, currency, amount, address, network_id):
+def create_withdrawal_view(request, telegram_id, currency, amount, address, network_id, token):
+    bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+    used = is_Valid(token, action='withdrawal')
+    if used:
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        async def send_message():
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "Invalid token. Please try again."
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Withdraw", callback_data="withdraw")],
+                ])
+            )
+
+        # Run the coroutine
+        asyncio.run(send_message())
+        return redirect(bot_redirect_url)
+    
+    # Validate the toke
     """Handle crypto withdrawal creation."""
     try:
         # Get the user from the database
         user = TelegramUser.objects.get(telegram_id=telegram_id)
         
+        # Check if the user has sufficient balance (including network fee)
+        total_withdrawal_amount = float(amount) + NETWORK_FEE
+        if user.balance < total_withdrawal_amount:
+            # Notify the user via the bot about insufficient balance
+            bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+            async def send_insufficient_balance_message():
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=(
+                        f"⚠️ Insufficient balance.\n\n"
+                        f"Your current balance is {user.balance:.2f}, but the withdrawal requires "
+                        f"{total_withdrawal_amount:.2f} (including network fee).\n\n"
+                        f"Please deposit more funds to proceed with the withdrawal."
+                    ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Deposit", callback_data="deposit"),
+                         InlineKeyboardButton("Main menu", callback_data="main_menu")],
+                    ])
+                )
+            asyncio.run(send_insufficient_balance_message())
+
+            bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+
         # Call the createCryptoWithdrawal function
         response_data = createCryptoWithdrawal(currency, amount, address, network_id)
         
@@ -574,6 +652,11 @@ def create_withdrawal_view(request, telegram_id, currency, amount, address, netw
             network_name=response_data['data']['network_name'],
             explorer_url=response_data['data']['explorer_url']
         )
+
+        # mark token as used
+        action_token = ActionToken.objects.get(token=token)
+        action_token.is_used = True
+        action_token.save()
 
         # Update the user's balance
         user.balance -= amount + NETWORK_FEE
@@ -597,7 +680,7 @@ def create_withdrawal_view(request, telegram_id, currency, amount, address, netw
         asyncio.run(send_message())
         
         # Redirect the user back to the bot with a success message
-        bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+        
         return redirect(bot_redirect_url)
     
     except TelegramUser.DoesNotExist:
