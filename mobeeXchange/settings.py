@@ -33,8 +33,8 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "6ec8-102-90-102-198.ngrok-free.app",
-    "localhost"
+    "localhost",
+    "mobee.live",
 ]
 
 

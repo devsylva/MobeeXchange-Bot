@@ -113,11 +113,11 @@ if __name__ == "__main__":
 
 
 
-import asyncio
-from bot.mobee_utils import createFiatDeposit
+# import asyncio
+# from bot.mobee_utils import createFiatDeposit
 
-async def test():
-    response = await createFiatDeposit(100000, "BNI")
-    print(response)
+# async def test():
+#     response = await createFiatDeposit(100000, "BNI")
+#     print(response)
 
-asyncio.run(test())
+# asyncio.run(test())

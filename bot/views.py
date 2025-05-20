@@ -1,17 +1,18 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from .keyboards import get_main_menu, get_deposit_menu, get_withdrawal_menu
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 from asgiref.sync import sync_to_async
 from telegram.request import HTTPXRequest
-from .mobee_utils import createFiatDeposit
+from .mobee_utils import createFiatDeposit, createCryptoWithdrawal
 from django.conf import settings
 from bot.models import TelegramUser, DepositRequest, WithdrawalRequest
 from .utils import create_or_update_user, get_user_balance, create_deposit_request
 import json
 from threading import Lock
+from urllib.parse import quote
 from functools import wraps
 import requests
 import logging
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 IDR_DEPOSIT_MIN_AMOUNT = 10000
 IDR_BANK_CODE = "BNI"
+BEP20_NETWORK_ID = 56
+NETWORK_FEE = 1.5
 
 # Configure request parameters with more generous timeouts
 request_kwargs = {
@@ -124,12 +127,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
-
 async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user input for deposit and withdraw amount."""
+    """Handle user input for deposit and withdrawal amounts or wallet addresses."""
     try:
         telegram_user = await register_user(update)
-        amount_text = update.message.text.strip()
+        user_input = update.message.text.strip()
+
+        # Check if the user is entering a wallet address
+        if context.user_data.get('awaiting_wallet_address'):
+            await handle_wallet_address(update, context)
+            return
 
         # Retrieve deposit or withdrawal method
         deposit_method = context.user_data.get('deposit_method')
@@ -144,12 +151,12 @@ async def handle_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         if deposit_method:
-            await process_deposit(update, context, amount_text, deposit_method)
+            await process_deposit(update, context, user_input, deposit_method)
         elif withdrawal_method:
-            await process_withdrawal(update, context, amount_text, withdrawal_method)
+            await process_withdrawal(update, context, user_input, withdrawal_method)
 
     except Exception as e:
-        # logger.error(f"Error in handle_amount_input: {str(e)}", exc_info=True)
+        logger.error(f"Error in handle_amount_input: {str(e)}", exc_info=True)
         await update.message.reply_text(
             "Sorry, there was an error processing your request. Please try again.",
             parse_mode='Markdown',
@@ -179,7 +186,7 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
             return
 
         # Generate a link for for the user to complete deposit
-        deposit_link = f"http://{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{IDR_BANK_CODE}"
+        deposit_link = f"{settings.YOUR_DOMAIN}/create-deposit/{telegram_user.telegram_id}/{amount}/{IDR_BANK_CODE}"
         print(deposit_link)
         
         text = (
@@ -193,7 +200,7 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
 
         # Add a button for "View Payment Details"
         reply_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Generate Account details", url="https://google.com")],
+            [InlineKeyboardButton("Generate Account details", url=deposit_link)],
             # [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
         ])
         
@@ -207,8 +214,10 @@ async def process_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE, am
 
 async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str, withdrawal_method: str):
     """Process withdrawal logic."""
+    telegram_user = await register_user(update)
     if withdrawal_method == "USDT":
         try:
+            # Validate withdrawal amount
             amount = float(amount_text)
             if amount <= 0:
                 raise ValueError("Amount must be positive")
@@ -220,22 +229,78 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
             )
             return
 
-        await update.message.reply_text("Processing your USDT withdrawal...", parse_mode='Markdown')
+        # Check if the user has sufficient balance (including network fee)
+        if telegram_user.balance < amount:
+            await update.message.reply_text(
+                f"⚠️ Insufficient balance for withdrawal. Remember, the network fee is ${NETWORK_FEE:.2f}.",
+                parse_mode='Markdown',
+                reply_markup=get_withdrawal_menu()
+            )
+            return
 
-        # Handle USDT withdrawal logic here
-        keyboard = [
-            [InlineKeyboardButton("↩️ Back to Withdrawal Options", callback_data="withdrawal")],
-            [InlineKeyboardButton("📞 Contact Support", callback_data="support")],
-        ]
+        # Store the withdrawal amount in context and prompt for wallet address
+        context.user_data['withdrawal_amount'] = amount - NETWORK_FEE
+        context.user_data['withdrawal_method'] = withdrawal_method
+
         await update.message.reply_text(
-            "Withdrawal processing logic goes here.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            f"💳 *Enter Your USDT Wallet Address*\n\n"
+            f"⚠️ Please provide a valid wallet address. The withdrawal will use the *BEP-20 network*.\n"
+            f"💰 *Network Fee:* ${NETWORK_FEE:.2f}\n\n"
+            "Type your wallet address below:",
+            parse_mode='Markdown'
         )
+        context.user_data['awaiting_wallet_address'] = True
 
-    context.user_data.pop('withdrawal_method', None)
+async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle and validate the user's wallet address input."""
+    # Check if the user is expected to input a wallet address
+    if not context.user_data.get('awaiting_wallet_address'):
+        await update.message.reply_text(
+            "⚠️ Unexpected input. Please follow the instructions to proceed.",
+            parse_mode='Markdown'
+        )
+        return
 
-    
+    wallet_address = update.message.text.strip()
+
+    # Basic validation for wallet address
+    if not wallet_address or len(wallet_address) < 10:  # Example length check
+        await update.message.reply_text(
+            "⚠️ Invalid wallet address. Please enter a valid BEP-20 wallet address.",
+            parse_mode='Markdown'
+        )
+        return
+
+    # Store the wallet address and proceed with withdrawal
+    context.user_data['wallet_address'] = wallet_address
+    context.user_data.pop('awaiting_wallet_address', None)  # Clear the flag
+
+    # Retrieve withdrawal details
+    telegram_user = await register_user(update)  # Ensure the user is registered
+    telegram_id = telegram_user.telegram_id
+    amount = int(float(context.user_data.get('withdrawal_amount', 0)))  # Convert to integer
+    currency = context.user_data.get('withdrawal_method', '')
+    network_id = 56  # BEP-20 network ID
+
+    # URL-encode the wallet address
+    encoded_wallet_address = quote(wallet_address)
+
+    # Generate the URL for the create_withdrawal_view
+    withdrawal_url = f"{settings.YOUR_DOMAIN}/create-withdraw/{telegram_id}/{currency}/{amount}/{encoded_wallet_address}/{network_id}"
+
+    # Create an inline keyboard button
+    keyboard = [
+        [InlineKeyboardButton("Proceed to Withdrawal", url=withdrawal_url)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Send the button to the user
+    await update.message.reply_text(
+        "✅ Wallet address validated. Click the button below to proceed with your withdrawal:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard."""
     query = update.callback_query
@@ -314,7 +379,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif query.data == "view_payment_details":
             telegram_user = await register_user(update)
             try:
-                print("code is here")
                 # Fetch the latest deposit request for the user
                 deposit_request = await sync_to_async(
                     lambda: DepositRequest.objects.filter(user=telegram_user).latest('created_at')
@@ -439,7 +503,7 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
         user = TelegramUser.objects.get(telegram_id=telegram_id)
         
         # Call the createFiatDeposit function
-        response_data = createFiatDeposit(amount, bank_code)
+        response_data = createFiatDeposit(amount=amount, bank_code=bank_code)
         
         # Save the deposit request in the database
         DepositRequest.objects.create(
@@ -481,3 +545,48 @@ def create_deposit_view(request, telegram_id, amount, bank_code):
         return HttpResponse(f"Error: {str(e)}", status=500)
 
 
+def create_withdrawal_view(request, telegram_id, currency, amount, address, network_id):
+    """Handle crypto withdrawal creation."""
+    try:
+        # Get the user from the database
+        user = TelegramUser.objects.get(telegram_id=telegram_id)
+        
+        # Call the createCryptoWithdrawal function
+        response_data = createCryptoWithdrawal(currency, amount, address, network_id)
+        
+        # Save the withdrawal request in the database
+        WithdrawalRequest.objects.create(
+            user=user,
+            withdrawal_id=response_data['data']['id'],
+            transaction_id=response_data['data']['transaction_id'],
+            amount=response_data['data']['amount'],
+            address=response_data['data']['address'],
+            network_id=response_data['data']['network_id'],
+            status="pending"
+        )
+
+        # Notify the bot to send a message with the "View Payment Details" button
+        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        async def send_message():
+            await bot.send_message(
+                chat_id=telegram_id,
+                text=(
+                    "✅ Your withdrawal request has been successfully created!\n\n"
+                    "Click the 'History' button below to see withdrawal status and details."
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("View Withdrawal Details", callback_data="history")],
+                ])
+            )
+
+        # Run the coroutine
+        asyncio.run(send_message())
+        
+        # Redirect the user back to the bot with a success message
+        bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+        return redirect(bot_redirect_url)
+    
+    except TelegramUser.DoesNotExist:
+        return HttpResponse("User not found", status=404)
+    except Exception as e:
+        return HttpResponse(f"Error: {str(e)}", status=500)

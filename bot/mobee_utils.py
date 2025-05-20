@@ -5,10 +5,10 @@ import time
 import requests
 import json
 from django.conf import settings
-from django.utils import timezone
 from asgiref.sync import sync_to_async
 from urllib.parse import urlparse
 import logging
+from .utils import get_user_balance
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -43,7 +43,6 @@ def generate_mobee_auth_headers(method, url, body=None):
     return headers
 
 
-# @sync_to_async
 def createFiatDeposit(amount, bank_code):
     url = "https://open-api.mobee.io/v1/wallets/fiat-deposits"
     method = "POST"
@@ -79,4 +78,40 @@ def createFiatDeposit(amount, bank_code):
         raise
 
 
+def createCryptoWithdrawal(currency, amount, address, network_id):
+    url = "https://open-api.mobee.io/v1/wallets/crypto-withdrawals"
+    method = "POST"
 
+    # Construct the request body
+    body = {
+        "currency": currency,
+        "amount": amount,
+        "address": address,
+        "network_id": network_id
+    }
+    
+    # Serialize the body to JSON
+    body_json = json.dumps(body, separators=(',', ':'))
+
+    # Generate headers
+    headers = generate_mobee_auth_headers(method, url, body_json)
+    headers["Content-Type"] = "application/json"
+    headers["accept"] = "application/json"
+    
+    try:
+        # Make the POST request
+        response = requests.post(url, headers=headers, data=body_json)
+        
+        # Check if request was successful
+        response.raise_for_status()
+        
+        # Log and return JSON response
+        logger.info(f"Response from Mobee: {response.json()}")
+        return response.json()
+    
+    except requests.HTTPError as e:
+        logger.error(f"HTTP Error: {e.response.status_code} - {e.response.text}")
+        raise
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {str(e)}")
+        raise
