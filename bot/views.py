@@ -11,6 +11,7 @@ from django.conf import settings
 from bot.models import TelegramUser, ActionToken, DepositRequest, WithdrawalRequest
 from .utils import create_or_update_user, get_user_balance, generate_action_token, is_tokenValid
 import json
+from django.db import transaction
 from threading import Lock
 from urllib.parse import quote
 from functools import wraps
@@ -667,49 +668,50 @@ def create_deposit_view(request, telegram_id, amount, bank_code, token):
         return redirect(bot_redirect_url)
   
     try:
-        # Get the user from the database
-        user = TelegramUser.objects.get(telegram_id=telegram_id)
-        # Call the createFiatDeposit function
-        response_data = createFiatDeposit(amount=amount, bank_code=bank_code)
-        
-        # Save the deposit request in the database
-        DepositRequest.objects.create(
-            user=user,
-            deposit_id=response_data['data']['id'],
-            transaction_id=response_data['data']['transaction_id'],
-            amount=response_data['data']['amount'],
-            account_name=response_data['data']['account_name'],
-            account_number=response_data['data']['account_number'],
-            bank_code=response_data['data']['bank_code'],
-            expired_at=response_data['data']['expired_at'],
-            status="pending"
-        )
-
-        # mark token as used
-        action_token = ActionToken.objects.get(token=token)
-        action_token.is_used = True
-        action_token.save()
-
-        # Notify the bot to send a message with the "View Payment Details" button
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-        async def send_message():
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=(
-                    "✅ Your deposit account has been successfully created!\n\n"
-                    "Click the 'View Payment Details' button below to see your payment details."
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
-                ])
+        with transaction.atomic():
+            # Get the user from the database
+            user = TelegramUser.objects.select_for_update().get(telegram_id=telegram_id)
+            # Call the createFiatDeposit function
+            response_data = createFiatDeposit(amount=amount, bank_code=bank_code)
+            
+            # Save the deposit request in the database
+            DepositRequest.objects.create(
+                user=user,
+                deposit_id=response_data['data']['id'],
+                transaction_id=response_data['data']['transaction_id'],
+                amount=response_data['data']['amount'],
+                account_name=response_data['data']['account_name'],
+                account_number=response_data['data']['account_number'],
+                bank_code=response_data['data']['bank_code'],
+                expired_at=response_data['data']['expired_at'],
+                status="pending"
             )
 
-        # Run the coroutine
-        asyncio.run(send_message())
+            # mark token as used
+            action_token = ActionToken.objects.get(token=token)
+            action_token.is_used = True
+            action_token.save()
+
+            # Notify the bot to send a message with the "View Payment Details" button
+            bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+            async def send_message():
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=(
+                        "✅ Your deposit account has been successfully created!\n\n"
+                        "Click the 'View Payment Details' button below to see your payment details."
+                    ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("View Payment Details", callback_data="view_payment_details")],
+                    ])
+                )
+
+            # Run the coroutine
+            asyncio.run(send_message())
+            
+            
+            return redirect(bot_redirect_url)
         
-        
-        return redirect(bot_redirect_url)
-    
     except TelegramUser.DoesNotExist:
         return HttpResponse("User not found", status=404)
     except Exception as e:
@@ -739,76 +741,78 @@ def create_withdrawal_view(request, telegram_id, currency, amount, address, netw
     # Validate the toke
     """Handle crypto withdrawal creation."""
     try:
-        # Get the user from the database
-        user = TelegramUser.objects.get(telegram_id=telegram_id)
-        
-        # Check if the user has sufficient balance (including network fee)
-        total_withdrawal_amount = float(amount) + NETWORK_FEE
-        if user.balance < total_withdrawal_amount:
-            # Notify the user via the bot about insufficient balance
+        # start atomic transaction
+        with transaction.atomic():
+            # Get the user from the database
+            user = TelegramUser.objects.select_for_update().get(telegram_id=telegram_id)
+            
+            # Check if the user has sufficient balance (including network fee)
+            total_withdrawal_amount = float(amount) + NETWORK_FEE
+            if user.balance < total_withdrawal_amount:
+                # Notify the user via the bot about insufficient balance
+                bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+                async def send_insufficient_balance_message():
+                    await bot.send_message(
+                        chat_id=telegram_id,
+                        text=(
+                            f"⚠️ Insufficient balance.\n\n"
+                            f"Your current balance is {user.balance:.2f}, but the withdrawal requires "
+                            f"{total_withdrawal_amount:.2f} (including network fee).\n\n"
+                            f"Please deposit more funds to proceed with the withdrawal."
+                        ),
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("Deposit", callback_data="deposit"),
+                            InlineKeyboardButton("Main menu", callback_data="main_menu")],
+                        ])
+                    )
+                asyncio.run(send_insufficient_balance_message())
+
+                bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
+
+            # Call the createCryptoWithdrawal function
+            response_data = createCryptoWithdrawal(currency, amount, address, network_id)
+            
+            # Save the withdrawal request in the database
+            WithdrawalRequest.objects.create(
+                user=user,
+                transaction_id=response_data['data']['id'],
+                currency=response_data['data']['currency'],
+                amount=response_data['data']['amount'],
+                fee=response_data['data']['fee'],
+                address=response_data['data']['address'],
+                network_name=response_data['data']['network_name'],
+                explorer_url=response_data['data']['explorer_url']
+            )
+
+            # mark token as used
+            action_token = ActionToken.objects.get(token=token)
+            action_token.is_used = True
+            action_token.save()
+
+            # Update the user's balance
+            user.balance -= amount + NETWORK_FEE
+            user.save()
+
+            # Notify the bot to send a message with the "View Payment Details" button
             bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-            async def send_insufficient_balance_message():
+            async def send_message():
                 await bot.send_message(
                     chat_id=telegram_id,
                     text=(
-                        f"⚠️ Insufficient balance.\n\n"
-                        f"Your current balance is {user.balance:.2f}, but the withdrawal requires "
-                        f"{total_withdrawal_amount:.2f} (including network fee).\n\n"
-                        f"Please deposit more funds to proceed with the withdrawal."
+                        "✅ Your withdrawal request has been successfully created!\n\n"
+                        "Click the 'History' button below to see withdrawal status and details."
                     ),
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Deposit", callback_data="deposit"),
-                         InlineKeyboardButton("Main menu", callback_data="main_menu")],
+                        [InlineKeyboardButton("View Withdrawal Details", callback_data="history")],
                     ])
                 )
-            asyncio.run(send_insufficient_balance_message())
 
-            bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
-
-        # Call the createCryptoWithdrawal function
-        response_data = createCryptoWithdrawal(currency, amount, address, network_id)
-        
-        # Save the withdrawal request in the database
-        WithdrawalRequest.objects.create(
-            user=user,
-            transaction_id=response_data['data']['id'],
-            currency=response_data['data']['currency'],
-            amount=response_data['data']['amount'],
-            fee=response_data['data']['fee'],
-            address=response_data['data']['address'],
-            network_name=response_data['data']['network_name'],
-            explorer_url=response_data['data']['explorer_url']
-        )
-
-        # mark token as used
-        action_token = ActionToken.objects.get(token=token)
-        action_token.is_used = True
-        action_token.save()
-
-        # Update the user's balance
-        user.balance -= amount + NETWORK_FEE
-        user.save()
-
-        # Notify the bot to send a message with the "View Payment Details" button
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-        async def send_message():
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=(
-                    "✅ Your withdrawal request has been successfully created!\n\n"
-                    "Click the 'History' button below to see withdrawal status and details."
-                ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("View Withdrawal Details", callback_data="history")],
-                ])
-            )
-
-        # Run the coroutine
-        asyncio.run(send_message())
-        
-        # Redirect the user back to the bot with a success message
-        
-        return redirect(bot_redirect_url)
+            # Run the coroutine
+            asyncio.run(send_message())
+            
+            # Redirect the user back to the bot with a success message
+            
+            return redirect(bot_redirect_url)
     
     except TelegramUser.DoesNotExist:
         return HttpResponse("User not found", status=404)
