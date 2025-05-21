@@ -62,3 +62,24 @@ A Telegram bot built with Python, Django, and the `python-telegram-bot` library 
 ```bash
 git clone https://github.com/devsylva/MobeeXchange-Bot.git
 cd MobeeXchange-Bot
+
+## Usage
+
+### Start the Bot
+- Start the bot by messaging `/start` on Telegram.
+- Use the inline keyboard or commands (`/balance`, `/deposit`, `/withdrawal`, `/history`, `/support`) to navigate.
+
+### For Deposits
+1. Select **"Deposit"** and choose **IDR**.
+2. Enter an amount (minimum **50,000 IDR**).
+3. Click the generated link to get bank account details.
+4. View payment details via the **"View Payment Details"** button.
+
+### For Withdrawals
+1. Select **"Withdraw"** and choose **USDT**.
+2. Enter an amount (minimum **2.5 USDT**).
+3. Provide a valid **BEP-20 wallet address**.
+4. Confirm via the generated withdrawal link.
+
+### Check Transaction History
+- Use `/history` or the **"Deposit History"** / **"Withdraw History"** buttons.
