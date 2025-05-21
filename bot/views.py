@@ -457,7 +457,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         telegram_user = await register_user(update)
 
-        if query.data.startswith('deposit_'):
+        if query.data == "balance":
+            balance = await get_user_balance(telegram_user)
+            text = f"💰 *Your Current Balance*\n\nAvailable: ${balance:.2f} USDT"
+            await query.message.edit_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=get_main_menu()
+            )
+
+        elif query.data == "deposit":
+            text = "📥 *Deposit Methods*\n\nChoose your preferred deposit method:"
+            await query.message.edit_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=get_deposit_menu()
+            )
+
+        elif query.data == "withdrawal":
+            text = "📤 *Withdraw Methods*\n\nChoose your preferred withdrawal method:"
+            await query.message.edit_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=get_withdrawal_menu()
+            )
+
+        elif query.data == "main_menu":
+            await query.message.edit_text(
+                "Main Menu",
+                parse_mode='Markdown',
+                reply_markup=get_main_menu()
+            )
+
+        elif query.data.startswith('deposit_'):
             currency = query.data.split('_')[1]
             context.user_data['deposit_method'] = currency
             await query.message.edit_text(
@@ -471,6 +503,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(
                 f"💸 *Enter Withdrawal Amount*\n\nPlease type the amount you want to withdraw in {coin}:",
                 parse_mode='Markdown'
+            )
+
+        elif query.data == "support":
+            text = (
+                "🛟 *Need Help?*\n\n"
+                f"Contact our support team directly\n\n"
+                "Please include:\n"
+                "• Your issue description\n"
+                "• Transaction ID (if applicable)\n"
+                "• Screenshots (if relevant)\n\n"
+                "Our team typically responds within 24 hours."
+            )
+            keyboard = [[InlineKeyboardButton("Contact Support", url=f"https://t.me/+sdwvApKiS39jZjI0")]]
+            await query.message.edit_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
 
         elif query.data == "view_payment_details":
@@ -508,6 +557,52 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
 
+        elif query.data == "history":
+            try:
+                # Fetch the last 5 deposit requests for the user
+                last_deposits = await sync_to_async(
+                    lambda: list(DepositRequest.objects.filter(user=telegram_user).order_by('-created_at')[:5])
+                )()
+
+                # Fetch the last 5 withdrawal requests for the user
+                last_withdrawals = await sync_to_async(
+                    lambda: list(WithdrawalRequest.objects.filter(user=telegram_user).order_by('-created_at')[:5])
+                )()
+
+                # Format the deposit history
+                deposit_history = "\n".join([
+                    f"• Amount: {deposit.amount}, Status: {deposit.status}, Date: {deposit.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    for deposit in last_deposits
+                ]) or "No deposit history available."
+
+                # Format the withdrawal history
+                withdrawal_history = "\n".join([
+                    f"• Amount: {withdrawal.amount}, Status: {withdrawal.status}, Date: {withdrawal.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                    for withdrawal in last_withdrawals
+                ]) or "No withdrawal history available."
+
+                # Combine the histories into a single message
+                text = (
+                    f"📜 *Transaction History*\n\n"
+                    f"📥 *Last 5 Deposits:*\n{deposit_history}\n\n"
+                    f"📤 *Last 5 Withdrawals:*\n{withdrawal_history}"
+                )
+
+                # Send the history message
+                await query.message.edit_text(
+                    text,
+                    parse_mode='Markdown',
+                    reply_markup=get_main_menu()
+                )
+
+            except Exception as e:
+                logger.error(f"Error fetching transaction history: {str(e)}", exc_info=True)
+                await query.message.edit_text(
+                    "⚠️ An error occurred while fetching your transaction history. Please try again later.",
+                    parse_mode='Markdown',
+                    reply_markup=get_main_menu()
+                )
+        
 
     except Exception as e:
         logger.error(f"Error in callback handler: {str(e)}", exc_info=True)
