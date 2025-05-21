@@ -8,8 +8,8 @@ from asgiref.sync import sync_to_async
 from telegram.request import HTTPXRequest
 from .mobee_utils import createFiatDeposit, createCryptoWithdrawal
 from django.conf import settings
-from bot.models import TelegramUser, DepositRequest, WithdrawalRequest
-from .utils import create_or_update_user, get_user_balance, generate_action_token, is_Valid
+from bot.models import TelegramUser, ActionToken, DepositRequest, WithdrawalRequest
+from .utils import create_or_update_user, get_user_balance, generate_action_token, is_tokenValid
 import json
 from threading import Lock
 from urllib.parse import quote
@@ -226,22 +226,14 @@ async def process_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE,
     """Process withdrawal logic."""
     telegram_user = await register_user(update)
     if withdrawal_method == "USDT":
-        try:
-            # Validate withdrawal amount
-            amount = float(amount_text)
-            if amount < USDT_WITHDRAWAL_MIN_AMOUNT:
-                # raise ValueError("Amount must be greater than or equal to 10,000")
-                await update.message.reply_text(
-                    f"⚠️ The minimum withdrawal amount is {USDT_WITHDRAWAL_MIN_AMOUNT} USDT.",
-                    parse_mode='Markdown',
-                    reply_markup=get_deposit_menu()
-                )
-                return
-        except ValueError:
+       
+        amount = float(amount_text)
+        if amount < USDT_WITHDRAWAL_MIN_AMOUNT:
+            # raise ValueError("Amount must be greater than or equal to 10,000")
             await update.message.reply_text(
-                "⚠️ Please enter a valid positive number for the withdrawal amount.",
+                f"⚠️ The minimum withdrawal amount is {USDT_WITHDRAWAL_MIN_AMOUNT} USDT.",
                 parse_mode='Markdown',
-                reply_markup=get_withdrawal_menu()
+                reply_markup=get_deposit_menu()
             )
             return
 
@@ -302,7 +294,7 @@ async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TY
     encoded_wallet_address = quote(wallet_address)
 
     # Generate a one-time token for withdrawal
-    token = generate_action_token(telegram_user, action='withdrawal')
+    token = await generate_action_token(telegram_user, action='withdrawal')
 
     # Generate the URL for the create_withdrawal_view
     withdrawal_url = f"{settings.YOUR_DOMAIN}/create-withdraw/{telegram_id}/{currency}/{amount}/{encoded_wallet_address}/{network_id}/{token}/"
@@ -520,7 +512,7 @@ async def telegram_webhook(request):
 
 def create_deposit_view(request, telegram_id, amount, bank_code, token):
     """Handle fiat deposit creation."""
-    used = is_Valid(token, action='deposit')
+    used = is_tokenValid(token, action='deposit')
     bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
     if used:
         bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
@@ -591,7 +583,7 @@ def create_deposit_view(request, telegram_id, amount, bank_code, token):
 
 def create_withdrawal_view(request, telegram_id, currency, amount, address, network_id, token):
     bot_redirect_url = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}"
-    used = is_Valid(token, action='withdrawal')
+    used = is_tokenValid(token, action='withdrawal')
     if used:
         bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
         async def send_message():
