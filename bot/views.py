@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot, BotCommand, MenuButtonDefault
 from .keyboards import get_main_menu, get_deposit_menu, get_withdrawal_menu
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from django.shortcuts import render, redirect, reverse
@@ -18,6 +18,7 @@ import requests
 import logging
 import asyncio
 import sys
+
 
 # Configure Windows event loop policy if needed
 if sys.platform == 'win32':
@@ -63,8 +64,10 @@ async def initialize_application():
             application.add_handler(CallbackQueryHandler(handle_callback))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_amount_input))
             await application.initialize()
+            await set_main_menu_buttons()
             logger.info("Telegram Application initialized")
     return application
+
 
 def async_handler(func):
     @wraps(func)
@@ -81,6 +84,25 @@ def async_handler(func):
             logger.error(f"Error in async handler: {str(e)}", exc_info=True)
             return HttpResponse("Internal Server Error", status=500)
     return wrapped
+
+
+async def set_main_menu_buttons():
+    """Set the main menu buttons for the bot."""
+    try:
+        # Define the bot commands
+        commands = [
+            BotCommand("start", "Start the bot"),
+        ]
+
+        # Set the bot commands
+        await bot.set_my_commands(commands)
+
+        # Set the menu button to default (main menu commands)
+        await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+
+        logger.info("Main menu buttons configured successfully.")
+    except Exception as e:
+        logger.error(f"Error setting main menu buttons: {str(e)}", exc_info=True)
 
 
 async def register_user(update: Update):
